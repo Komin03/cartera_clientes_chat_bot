@@ -19,6 +19,11 @@ function normalizeLimit(limit, fallback = 25) {
   return Math.min(parsed, 200);
 }
 
+function normalizeText(value, fallback = "") {
+  if (value === null || value === undefined) return fallback;
+  return String(value).trim();
+}
+
 async function createClient(data) {
   const db = getDb();
   const [result] = await db.execute(
@@ -87,6 +92,53 @@ async function updateClientStatus(clientId, statusCode) {
   return getClientById(clientId);
 }
 
+async function listClientsForExport(limit = 5000) {
+  const db = getDb();
+  const safeLimit = Math.min(Math.max(Number(limit) || 5000, 1), 20000);
+  const [rows] = await db.query(
+    `SELECT nombre, telefono, empresa, direccion, notas, estado
+     FROM clientes
+     ORDER BY id ASC
+     LIMIT ${safeLimit}`
+  );
+
+  return rows;
+}
+
+async function importClients(items) {
+  if (!Array.isArray(items)) {
+    throw new Error("El JSON debe ser un arreglo de clientes");
+  }
+
+  const db = getDb();
+  let imported = 0;
+  let skipped = 0;
+
+  for (const item of items) {
+    const nombre = normalizeText(item?.nombre || item?.name);
+    if (!nombre) {
+      skipped += 1;
+      continue;
+    }
+
+    const telefono = normalizeText(item?.telefono || item?.phone);
+    const empresa = normalizeText(item?.empresa || item?.company);
+    const direccion = normalizeText(item?.direccion || item?.address);
+    const notas = normalizeText(item?.notas || item?.notes);
+    const estado = normalizeText(item?.estado || item?.status, resolveStatusLabel("sin_gestion"));
+
+    await db.execute(
+      `INSERT INTO clientes (nombre, telefono, empresa, direccion, notas, estado)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [nombre, telefono, empresa, direccion, notas, estado]
+    );
+
+    imported += 1;
+  }
+
+  return { imported, skipped };
+}
+
 async function getDashboardStats() {
   const db = getDb();
   const [[clients]] = await db.execute("SELECT COUNT(*) AS total FROM clientes");
@@ -111,7 +163,9 @@ module.exports = {
   createClient,
   getClientById,
   getDashboardStats,
+  importClients,
   listClients,
+  listClientsForExport,
   resolveStatusLabel,
   searchClients,
   updateClientStatus,
